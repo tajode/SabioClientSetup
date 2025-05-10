@@ -4,139 +4,127 @@ setup_sabio.py
 
 Automates:
 1. apt updates & installs (OS packages, drivers)
-2. Project folder + Python venv creation
-3. Installing Python dependencies
+2. Git clone of the SabioClientSetup repository
+3. Python venv creation and dependency installation
 4. Writing /etc/odbc.ini & /etc/odbcinst.ini
-5. Scaffolding the sabio-monitor.py script
-6. Setting executable permissions
-7. Registering the cron job for every-30-min execution
+5. Registering the cron job for periodic execution of sabio-monitor.py
 """
 
 import os
 import sys
 import subprocess
 from pathlib import Path
-import getpass
-import stat
+from textwrap import dedent
 
 # --- CONFIGURATION ---
-# Adjust these per your environment or externalize to a config file
-CRON_SCHEDULE = "*/30 * * * *"
-PROJECT_DIR = Path.home() / "sabio-monitor"
+REPO_URL = "https://github.com/tajode/SabioClientSetup.git"
+PROJECT_DIR = Path.home() / "SabioClientSetup"
 VENV_DIR = PROJECT_DIR / "venv"
 PYTHON_BIN = VENV_DIR / "bin" / "python"
-SCRIPT_PATH = PROJECT_DIR / "sabio-monitor.py"
-CRONTAB_MARKER = "# Sábio monitor cron"
+MONITOR_SCRIPT = PROJECT_DIR / "sabio-monitor.py"
+CRON_MARKER = "# sabio-monitor cron"
+CRON_SCHEDULE = "*/30 * * * *"
+
+OS_PACKAGES = [
+    "git", "python3-venv",
+    "freetds-dev", "freetds-bin", "unixodbc", "tdsodbc"
+]
 
 ODBC_INI = "/etc/odbc.ini"
 ODBCINST_INI = "/etc/odbcinst.ini"
-
-ODBC_INI_CONTENT = """
+ODBC_INI_CONTENT = dedent("""
 [MSSQLServer]
 Description = Remote SQL Server
-Driver = FreeTDS
-Server = 161.97.165.126
-Port = 1433
-Database = test-NetworkMonitoring
+Driver      = FreeTDS
+Server      = 161.97.165.126
+Port        = 1433
+Database    = test-NetworkMonitoring
 TDS_Version = 8.0
-""".lstrip()
-
-ODBCINST_INI_CONTENT = """
+""")
+ODBCINST_INI_CONTENT = dedent("""
 [FreeTDS]
 Description = FreeTDS Driver
-Driver = /usr/lib/aarch64-linux-gnu/odbc/libtdsodbc.so
-""".lstrip()
-
-PIP_REQUIREMENTS = [
-    "speedtest-cli",
-    "requests",
-    "pandas",
-    "sqlalchemy",
-    "pyodbc"
-]
-
-OS_PACKAGES = [
-    "python3-venv",
-    "freetds-dev",
-    "freetds-bin",
-    "unixodbc",
-    "tdsodbc"
-]
+Driver      = /usr/lib/aarch64-linux-gnu/odbc/libtdsodbc.so
+""")
 
 # --- HELPER FUNCTIONS ---
-
-def run(cmd, check=True, **kwargs):
+def run(cmd):
     print(f"$ {' '.join(cmd)}")
-    subprocess.run(cmd, check=check, **kwargs)
+    subprocess.run(cmd, check=True)
 
-def apt_update_and_install():
+
+def apt_install():
     run(["apt", "update", "-y"])
     run(["apt", "full-upgrade", "-y"])
     run(["apt", "install", "-y"] + OS_PACKAGES)
 
-def setup_project_folder():
+
+def clone_repo():
     PROJECT_DIR.mkdir(parents=True, exist_ok=True)
-    os.chdir(PROJECT_DIR)
+    if (PROJECT_DIR / ".git").exists():
+        print("Repository already exists, pulling latest changes.")
+        run(["git", "-C", str(PROJECT_DIR), "pull"])
+    else:
+        run(["git", "clone", REPO_URL, str(PROJECT_DIR)])
 
-def create_and_activate_venv():
-    run(["python3", "-m", "venv", str(VENV_DIR)])
-    # Note: activation is implicit by calling VENV_DIR/bin/python below
 
-def install_python_deps():
-    run([str(PYTHON_BIN), "-m", "pip", "install", "--upgrade", "pip"])
-    run([str(PYTHON_BIN), "-m", "pip", "install"] + PIP_REQUIREMENTS)
+def create_and_install_venv():
+    if not VENV_DIR.exists():
+        run(["python3", "-m", "venv", str(VENV_DIR)])
+    pip = VENV_DIR / "bin" / "pip"
+    run([str(pip), "install", "--upgrade", "pip"])
+    req_file = PROJECT_DIR / "requirements.txt"
+    if req_file.exists():
+        run([str(pip), "install", "-r", str(req_file)])
+    else:
+        # Fallback packages
+        run([str(pip), "install", "speedtest-cli", "requests", "pandas", "sqlalchemy", "pyodbc"])
 
-def write_file(path, content, mode=0o644):
+
+def write_config(path, content):
     print(f"Writing {path}")
-    with open(path, "w") as f:
+    with open(path, 'w') as f:
         f.write(content)
-    os.chmod(path, mode)
 
-def scaffold_monitor_script():
-    if SCRIPT_PATH.exists():
-        print(f"{SCRIPT_PATH} already exists; skipping scaffold")
-        return
-    PAYLOAD = """#!/usr/bin/env python3
-import json, subprocess, socket, time
-from datetime import datetime
-# (…Your sabio-monitor.py content here…)
-# Copy your full monitoring script body here.
-"""
-    write_file(SCRIPT_PATH, PAYLOAD, mode=0o755)
 
-def register_cronjob():
-    # Read existing crontab
+def configure_odbc():
+    write_config(ODBC_INI,    ODBC_INI_CONTENT)
+    write_config(ODBCINST_INI, ODBCINST_INI_CONTENT)
+
+
+def register_cron():
+    cron_line = f"{CRON_SCHEDULE} {PYTHON_BIN} {MONITOR_SCRIPT} {CRON_MARKER}"
+    # load existing crontab
     result = subprocess.run(["crontab", "-l"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-    lines = result.stdout.splitlines()
-    # Remove old entries
-    lines = [l for l in lines if CRONTAB_MARKER not in l]
-    # Add new scheduled job
-    lines.append(f"{CRON_SCHEDULE} {str(PYTHON_BIN)} {str(SCRIPT_PATH)}  # {CRONTAB_MARKER}")
-    # Write back
-    cron_content = "\n".join(lines) + "\n"
+    lines = [l for l in result.stdout.splitlines() if CRON_MARKER not in l]
+    lines.append(cron_line)
+    cron_text = "\n".join(lines) + "\n"
     p = subprocess.Popen(["crontab", "-"], stdin=subprocess.PIPE, text=True)
-    p.communicate(cron_content)
+    p.communicate(cron_text)
     print("Cron job registered.")
 
-# --- MAIN EXECUTION ---
 
+# --- MAIN ---
 def main():
     if os.geteuid() != 0:
-        print("ERROR: This script must be run as root (sudo).")
-        sys.exit(1)
+        sys.exit("Error: run this script with sudo or as root.")
 
-    print("=== Sábio setup automation starting ===")
-    apt_update_and_install()                                  # :contentReference[oaicite:0]{index=0}
-    setup_project_folder()                                    # :contentReference[oaicite:1]{index=1}
-    create_and_activate_venv()                                # :contentReference[oaicite:2]{index=2}
-    install_python_deps()                                     # :contentReference[oaicite:3]{index=3}
-    write_file(ODBC_INI, ODBC_INI_CONTENT)                    # :contentReference[oaicite:4]{index=4}
-    write_file(ODBCINST_INI, ODBCINST_INI_CONTENT)            # :contentReference[oaicite:5]{index=5}
-    scaffold_monitor_script()                                 # :contentReference[oaicite:6]{index=6}
-    register_cronjob()                                        # :contentReference[oaicite:7]{index=7}
+    print("=== Starting SabioClientSetup automation ===")
+    apt_install()
+    clone_repo()
+    create_and_install_venv()
+    configure_odbc()
 
-    print("=== Sábio setup automation complete! ===")
-    print(f"Device is ready—cron will run the monitor script every 30 minutes.")
+    # Ensure monitor script is executable
+    if MONITOR_SCRIPT.exists():
+        MONITOR_SCRIPT.chmod(0o755)
+    else:
+        print(f"Warning: {MONITOR_SCRIPT} not found.")
 
-if __name__ == "__main__":
+    register_cron()
+
+    print("=== Setup complete! sabio-monitor will run every 30 minutes ===")
+
+
+if __name__ == '__main__':
     main()
