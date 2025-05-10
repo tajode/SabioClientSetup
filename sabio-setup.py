@@ -4,10 +4,9 @@ setup_sabio.py
 
 Automates:
 1. apt updates & installs (OS packages, drivers)
-2. Git clone of the SabioClientSetup repository
-3. Python venv creation and dependency installation
-4. Writing /etc/odbc.ini & /etc/odbcinst.ini
-5. Registering the cron job for periodic execution of sabio-monitor.py
+2. Python venv creation and dependency installation
+3. Writing /etc/odbc.ini & /etc/odbcinst.ini
+4. Registering the cron job for periodic execution of sabio-monitor.py
 """
 
 import os
@@ -17,13 +16,12 @@ from pathlib import Path
 from textwrap import dedent
 
 # --- CONFIGURATION ---
-REPO_URL = "https://github.com/tajode/SabioClientSetup.git"
-PROJECT_DIR = Path.home() / "SabioClientSetup"
-VENV_DIR = PROJECT_DIR / "venv"
+PROJECT_DIR = Path.home() / "sabio-monitor"
+VENV_DIR = PROJECT_DIR / "sabio-venv"
 PYTHON_BIN = VENV_DIR / "bin" / "python"
 MONITOR_SCRIPT = PROJECT_DIR / "sabio-monitor.py"
 CRON_MARKER = "# sabio-monitor cron"
-CRON_SCHEDULE = "*/30 * * * *"
+CRON_SCHEDULE = "*/2 * * * *"  # Run every 2 minutes per documentation
 
 OS_PACKAGES = [
     "git", "python3-venv",
@@ -59,13 +57,9 @@ def apt_install():
     run(["apt", "install", "-y"] + OS_PACKAGES)
 
 
-def clone_repo():
+def create_project_dir():
     PROJECT_DIR.mkdir(parents=True, exist_ok=True)
-    if (PROJECT_DIR / ".git").exists():
-        print("Repository already exists, pulling latest changes.")
-        run(["git", "-C", str(PROJECT_DIR), "pull"])
-    else:
-        run(["git", "clone", REPO_URL, str(PROJECT_DIR)])
+    print(f"Created project directory at {PROJECT_DIR}")
 
 
 def create_and_install_venv():
@@ -73,12 +67,8 @@ def create_and_install_venv():
         run(["python3", "-m", "venv", str(VENV_DIR)])
     pip = VENV_DIR / "bin" / "pip"
     run([str(pip), "install", "--upgrade", "pip"])
-    req_file = PROJECT_DIR / "requirements.txt"
-    if req_file.exists():
-        run([str(pip), "install", "-r", str(req_file)])
-    else:
-        # Fallback packages
-        run([str(pip), "install", "speedtest-cli", "requests", "pandas", "sqlalchemy", "pyodbc"])
+    # Install required packages directly as specified in documentation
+    run([str(pip), "install", "speedtest-cli", "requests", "pandas", "sqlalchemy", "pyodbc"])
 
 
 def write_config(path, content):
@@ -88,12 +78,16 @@ def write_config(path, content):
 
 
 def configure_odbc():
-    write_config(ODBC_INI,    ODBC_INI_CONTENT)
+    write_config(ODBC_INI, ODBC_INI_CONTENT)
     write_config(ODBCINST_INI, ODBCINST_INI_CONTENT)
 
 
 def register_cron():
-    cron_line = f"{CRON_SCHEDULE} {PYTHON_BIN} {MONITOR_SCRIPT} {CRON_MARKER}"
+    # Use absolute paths for the cron job as in the documentation
+    abs_python_path = str(Path.home() / "sabio-monitor/sabio-venv/bin/python")
+    abs_script_path = str(Path.home() / "sabio-monitor/sabio-monitor.py")
+    cron_line = f"{CRON_SCHEDULE} {abs_python_path} {abs_script_path} {CRON_MARKER}"
+    
     # load existing crontab
     result = subprocess.run(["crontab", "-l"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     lines = [l for l in result.stdout.splitlines() if CRON_MARKER not in l]
@@ -101,7 +95,7 @@ def register_cron():
     cron_text = "\n".join(lines) + "\n"
     p = subprocess.Popen(["crontab", "-"], stdin=subprocess.PIPE, text=True)
     p.communicate(cron_text)
-    print("Cron job registered.")
+    print("Cron job registered to run every 2 minutes.")
 
 
 # --- MAIN ---
@@ -109,21 +103,29 @@ def main():
     if os.geteuid() != 0:
         sys.exit("Error: run this script with sudo or as root.")
 
-    print("=== Starting SabioClientSetup automation ===")
+    print("=== Starting Sabio monitoring setup automation ===")
     apt_install()
-    clone_repo()
+    create_project_dir()
     create_and_install_venv()
     configure_odbc()
 
+    # Create a placeholder monitor script if it doesn't exist
+    if not MONITOR_SCRIPT.exists():
+        print(f"Creating placeholder {MONITOR_SCRIPT}")
+        with open(MONITOR_SCRIPT, 'w') as f:
+            f.write('#!/usr/bin/env python3\n')
+            f.write('# Sabio monitoring script\n')
+            f.write('# Update this file with the actual monitoring code\n')
+    
     # Ensure monitor script is executable
-    if MONITOR_SCRIPT.exists():
-        MONITOR_SCRIPT.chmod(0o755)
-    else:
-        print(f"Warning: {MONITOR_SCRIPT} not found.")
+    MONITOR_SCRIPT.chmod(0o755)
 
     register_cron()
 
-    print("=== Setup complete! sabio-monitor will run every 30 minutes ===")
+    print("=== Setup complete! sabio-monitor will run every 2 minutes ===")
+    print(f"Project directory: {PROJECT_DIR}")
+    print(f"Virtual environment: {VENV_DIR}")
+    print(f"Monitor script: {MONITOR_SCRIPT}")
 
 
 if __name__ == '__main__':
