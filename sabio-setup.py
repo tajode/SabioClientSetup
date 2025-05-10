@@ -4,9 +4,10 @@ setup_sabio.py
 
 Automates the setup of the Sabio monitoring agent:
 1. apt updates & installs (OS packages, drivers)
-2. Python venv creation and dependency installation
-3. Writing /etc/odbc.ini & /etc/odbcinst.ini
-4. Registering the cron job for periodic execution of sabio-monitor.py
+2. Fetching sabio-monitor.py from GitHub repository
+3. Python venv creation and dependency installation
+4. Writing /etc/odbc.ini & /etc/odbcinst.ini
+5. Registering the cron job for periodic execution of sabio-monitor.py
 
 This script guides you through the entire process with clear explanations.
 """
@@ -14,10 +15,14 @@ This script guides you through the entire process with clear explanations.
 import os
 import sys
 import subprocess
+import tempfile
+import shutil
+import random
 from pathlib import Path
 from textwrap import dedent
 
 # --- CONFIGURATION ---
+REPO_URL = "https://github.com/tajode/SabioClientSetup.git"
 PROJECT_DIR = Path.home() / "sabio-monitor"
 VENV_DIR = PROJECT_DIR / "sabio-venv"
 PYTHON_BIN = VENV_DIR / "bin" / "python"
@@ -60,6 +65,7 @@ def apt_install():
     
     print("\nUpgrading existing packages to latest versions...")
     print("This may take several minutes depending on your connection speed.")
+    print("Feel free to take a short break while this completes.")
     run(["apt", "full-upgrade", "-y"])
     
     print("\nInstalling required packages:")
@@ -76,8 +82,39 @@ def create_project_dir():
     print(f"✓ Project directory created at {PROJECT_DIR}")
 
 
+def fetch_monitor_script():
+    print("\n=== STEP 3: Fetching monitoring script from GitHub ===")
+    print(f"Repository URL: {REPO_URL}")
+    
+    # Create a temporary directory for the git clone
+    with tempfile.TemporaryDirectory() as temp_dir:
+        print(f"Cloning repository to temporary location...")
+        print("This may take a moment. A good time for a coffee if you'd like one.")
+        run(["git", "clone", REPO_URL, temp_dir])
+        
+        # Check if the source file exists
+        source_file = Path(temp_dir) / "sabio-monitor.py"
+        if not source_file.exists():
+            raise FileNotFoundError(f"Could not find sabio-monitor.py in the cloned repository")
+        
+        # Copy the file to our project directory
+        print(f"Copying sabio-monitor.py to {MONITOR_SCRIPT}")
+        shutil.copy2(source_file, MONITOR_SCRIPT)
+        
+        # Check if requirements.txt exists and use it if available
+        req_file = Path(temp_dir) / "requirements.txt"
+        if req_file.exists():
+            print("Found requirements.txt in repository, will use it for dependency installation")
+            shutil.copy2(req_file, PROJECT_DIR / "requirements.txt")
+    
+    # Make the script executable
+    print("Making script executable...")
+    MONITOR_SCRIPT.chmod(0o755)
+    print(f"✓ Successfully installed monitoring script from GitHub")
+
+
 def create_and_install_venv():
-    print("\n=== STEP 3: Setting up Python virtual environment ===")
+    print("\n=== STEP 4: Setting up Python virtual environment ===")
     
     if not VENV_DIR.exists():
         print(f"Creating new virtual environment at {VENV_DIR}")
@@ -89,14 +126,22 @@ def create_and_install_venv():
     print("\nUpdating pip to latest version...")
     run([str(pip), "install", "--upgrade", "pip"])
     
-    print("\nInstalling required Python packages:")
-    print("  - speedtest-cli: for network speed testing")
-    print("  - requests: for HTTP API communication")
-    print("  - pandas: for data manipulation")
-    print("  - sqlalchemy: for database operations")
-    print("  - pyodbc: for ODBC database connections")
-    print("\nThis may take several minutes...")
-    run([str(pip), "install", "speedtest-cli", "requests", "pandas", "sqlalchemy", "pyodbc"])
+    # Check if we have a requirements.txt file
+    req_file = PROJECT_DIR / "requirements.txt"
+    if req_file.exists():
+        print("\nInstalling dependencies from requirements.txt...")
+        print("This will take a few minutes. Feel free to step away for a moment.")
+        run([str(pip), "install", "-r", str(req_file)])
+    else:
+        print("\nInstalling required Python packages:")
+        print("  - speedtest-cli: for network speed testing")
+        print("  - requests: for HTTP API communication")
+        print("  - pandas: for data manipulation")
+        print("  - sqlalchemy: for database operations")
+        print("  - pyodbc: for ODBC database connections")
+        print("\nThis may take several minutes. A perfect time for a short break.")
+        run([str(pip), "install", "speedtest-cli", "requests", "pandas", "sqlalchemy", "pyodbc"])
+    
     print("✓ Python virtual environment setup complete")
 
 
@@ -107,7 +152,7 @@ def write_config(path, content):
 
 
 def configure_odbc():
-    print("\n=== STEP 4: Configuring ODBC database connection ===")
+    print("\n=== STEP 5: Configuring ODBC database connection ===")
     print("Setting up connection to SQL Server database for storing monitoring data")
     
     print(f"\nCreating ODBC Data Source configuration at {ODBC_INI}")
@@ -122,7 +167,7 @@ def configure_odbc():
 
 
 def register_cron():
-    print("\n=== STEP 5: Setting up automated monitoring ===")
+    print("\n=== STEP 6: Setting up automated monitoring ===")
     print("Configuring cron job to run the monitoring script every 2 minutes")
     
     # Use absolute paths for the cron job as in the documentation
@@ -157,31 +202,15 @@ def main():
 
     print("This utility will set up the Sabio monitoring agent on your Raspberry Pi.")
     print("It will guide you through the entire installation process.")
+    print("Some steps may take a while, so feel free to take breaks during the longer operations.")
     print("Follow the prompts to complete the setup.\n")
     
     try:
         apt_install()
         create_project_dir()
+        fetch_monitor_script()
         create_and_install_venv()
         configure_odbc()
-
-        # Create a placeholder monitor script if it doesn't exist
-        print("\n=== STEP 6: Creating monitoring script ===")
-        if not MONITOR_SCRIPT.exists():
-            print(f"Creating initial monitoring script at {MONITOR_SCRIPT}")
-            with open(MONITOR_SCRIPT, 'w') as f:
-                f.write('#!/usr/bin/env python3\n')
-                f.write('# Sabio monitoring script\n')
-                f.write('# Update this file with the actual monitoring code\n')
-            print("✓ Initial script created")
-        else:
-            print(f"Found existing monitoring script at {MONITOR_SCRIPT}")
-        
-        # Ensure monitor script is executable
-        print("Making script executable...")
-        MONITOR_SCRIPT.chmod(0o755)
-        print("✓ Script permissions set")
-
         register_cron()
 
         print("\n======================================================")
